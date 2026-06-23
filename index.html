@@ -8,9 +8,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
-        import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, getDocs, query, orderBy } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
-        // --- CONFIGURACIÓN DE FIREBASE ---
         const firebaseConfig = {
             apiKey: "AIzaSyBSaIzbcFiyTF1zy9_9Z97ZSPfL322xO24",
             authDomain: "inventariochuyma-da052.firebaseapp.com",
@@ -24,7 +23,6 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // UI
         const loginScreen = document.getElementById('login-screen');
         const appScreen = document.getElementById('app-screen');
 
@@ -47,7 +45,6 @@
 
         window.logout = () => signOut(auth);
 
-        // Funciones de Lógica
         const RECIPES = {
             amber: { name: 'Amber Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] },
             pale: { name: 'Pale Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] }
