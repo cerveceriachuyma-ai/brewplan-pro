@@ -26,7 +26,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- LÓGICA DE PROCESOS Y CAPACIDAD ---
+        // --- LÓGICA DE CAPACIDAD ---
         const EQUIPMENT_LIMITS = { fermenter: 2, maturation: 2, carbonation: 1 };
 
         const RECIPES = {
@@ -126,54 +126,48 @@
             const startDateValue = document.getElementById('startDate').value;
             if (!startDateValue || productionQueue.length === 0) return;
 
-            let originalDate = new Date(startDateValue);
+            let currentCoccionDate = new Date(startDateValue);
+            let proposedBatches = [];
             
-            const intentarProgramar = (fechaInicio) => {
-                let currentCoccionDate = new Date(fechaInicio);
-                let proposedBatches = [];
-                for (const item of productionQueue) {
-                    for (let i = 0; i < item.count; i++) {
-                        const phases = RECIPES[item.recipeKey].phases.map(p => ({
-                            name: p.name, offset: p.offset, duration: p.duration, equip: p.equip,
-                            date: addDaysWork(currentCoccionDate, p.offset, p.name)
-                        }));
-                        proposedBatches.push({ recipeKey: item.recipeKey, recipeName: item.name, phases });
-                        let next = new Date(currentCoccionDate);
-                        next.setDate(next.getDate() + 1);
-                        while (!isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
-                        currentCoccionDate = next;
-                    }
+            for (const item of productionQueue) {
+                for (let i = 0; i < item.count; i++) {
+                    const phases = RECIPES[item.recipeKey].phases.map(p => ({
+                        name: p.name, offset: p.offset, duration: p.duration, equip: p.equip,
+                        date: addDaysWork(currentCoccionDate, p.offset, p.name)
+                    }));
+                    proposedBatches.push({ recipeKey: item.recipeKey, recipeName: item.name, phases });
+                    let next = new Date(currentCoccionDate);
+                    next.setDate(next.getDate() + 1);
+                    while (!isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
+                    currentCoccionDate = next;
                 }
-                return { proposedBatches, conflict: checkCapacityConflict(proposedBatches) };
-            };
-
-            let resultado = intentarProgramar(originalDate);
-            let diasIntentados = 0;
-            const LIMITE_DIAS = 3; 
-            
-            while (resultado.conflict.conflict && diasIntentados < LIMITE_DIAS) {
-                let siguienteDia = new Date(originalDate);
-                siguienteDia.setDate(siguienteDia.getDate() + 1);
-                originalDate = siguienteDia;
-                resultado = intentarProgramar(originalDate);
-                diasIntentados++;
             }
 
-            if (resultado.conflict.conflict) {
-                alert("No hay espacio en los próximos 3 días. Ajusta la fecha manualmente.");
-                return;
+            const check = checkCapacityConflict(proposedBatches);
+            if (check.conflict) {
+                if(!confirm(`ALERTA: Conflicto el ${formatDate(check.date)} en ${check.equip}. ¿Programar de todas formas?`)) return;
             }
 
-            if (diasIntentados > 0) {
-                const fechaSugerida = formatDate(originalDate.toISOString().split('T')[0]);
-                if (!confirm(`Conflicto detectado. ¿Programar a partir del ${fechaSugerida}?`)) return;
-            }
-
-            for (const b of resultado.proposedBatches) {
+            for (const b of proposedBatches) {
                 await addDoc(collection(db, "brewplan_data"), { ...b, createdAt: new Date().getTime() });
             }
             productionQueue = []; renderQueue(); loadData();
             alert("Producción programada.");
+        };
+
+        window.saveBatch = async (id, recipeKey, changedIndex, newDateValue) => {
+            const newDate = new Date(newDateValue);
+            const offsetOfChanged = RECIPES[recipeKey].phases[changedIndex].offset;
+            let baseDate = new Date(newDate);
+            baseDate.setDate(baseDate.getDate() - offsetOfChanged);
+
+            const updatedPhases = RECIPES[recipeKey].phases.map((p) => ({
+                name: p.name, offset: p.offset, duration: p.duration, equip: p.equip,
+                date: addDaysWork(baseDate, p.offset, p.name)
+            }));
+
+            await updateDoc(doc(db, "brewplan_data", id), { phases: updatedPhases });
+            loadData();
         };
 
         window.loadData = async () => {
@@ -193,10 +187,10 @@
                         <button onclick="deleteBatch('${docSnap.id}')" class="text-rose-400 text-xs">Eliminar</button>
                     </div>
                     <div class="space-y-3">
-                        ${b.phases.map(p => `
+                        ${b.phases.map((p, index) => `
                             <div class="grid grid-cols-2 items-center gap-4 text-sm">
                                 <span class="font-medium text-purple-700">${p.name}</span>
-                                <span class="text-right text-purple-900 font-bold">${formatDate(p.date)}</span>
+                                <input type="date" value="${p.date}" onchange="saveBatch('${docSnap.id}', '${b.recipeKey}', ${index}, this.value)" class="bg-purple-50 p-2 rounded-lg text-right">
                             </div>
                         `).join('')}
                     </div>
