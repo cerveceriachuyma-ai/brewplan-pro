@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrewPlan Pro - Acceso Seguro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
+
+        // --- PEGA TU CONFIGURACIÓN AQUÍ ---
+        const firebaseConfig = {
+            apiKey: "TU_API_KEY",
+            authDomain: "TU_PROYECTO.firebaseapp.com",
+            projectId: "TU_PROYECTO_ID",
+            storageBucket: "TU_PROYECTO.appspot.com",
+            messagingSenderId: "TU_ID",
+            appId: "TU_APP_ID"
+        };
+        // ----------------------------------
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+
+        // UI Logic
+        const loginScreen = document.getElementById('login-screen');
+        const appScreen = document.getElementById('app-screen');
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                loginScreen.classList.add('hidden');
+                appScreen.classList.remove('hidden');
+                renderDashboard();
+            } else {
+                loginScreen.classList.remove('hidden');
+                appScreen.classList.add('hidden');
+            }
+        });
+
+        window.login = () => {
+            const email = document.getElementById('email').value;
+            const pass = document.getElementById('password').value;
+            signInWithEmailAndPassword(auth, email, pass).catch(e => alert("Error de acceso: " + e.message));
+        };
+    </script>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f1ea; }
+        .card { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+
+    <!-- Pantalla de Login -->
+    <div id="login-screen" class="max-w-md mx-auto mt-20 bg-white p-8 rounded-2xl card">
+        <h1 class="text-2xl font-bold text-amber-900 mb-6 text-center">🔐 Acceso a BrewPlan Pro</h1>
+        <input type="email" id="email" placeholder="Correo electrónico" class="w-full p-3 border rounded-xl mb-4">
+        <input type="password" id="password" placeholder="Contraseña" class="w-full p-3 border rounded-xl mb-4">
+        <button onclick="login()" class="w-full bg-amber-800 text-white font-bold py-4 rounded-xl">Ingresar</button>
+    </div>
+
+    <!-- Pantalla de la App (Oculta hasta login) -->
+    <div id="app-screen" class="hidden max-w-xl mx-auto">
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-amber-900">BrewPlan Pro</h1>
+            <button onclick="signOut(auth)" class="text-xs underline text-gray-500">Cerrar sesión</button>
+        </header>
+
+        <!-- ... existing code ... -->
+        <!-- (Aquí va el mismo formulario y dashboard de tu versión anterior) -->
+        <div class="bg-white p-6 rounded-2xl card mb-8">
+             <h2 class="text-lg font-bold text-gray-800 mb-4">Programar Nueva Producción</h2>
+             <!-- [Formulario aquí...] -->
+        </div>
+        <div id="dashboard" class="space-y-4"></div>
+    </div>
+
+    <script>
+        // ... (Tu lógica de renderDashboard y addBatches sigue igual aquí)
+    </script>
+</body>
+</html>
