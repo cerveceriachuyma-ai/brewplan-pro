@@ -12,6 +12,7 @@
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
+        // --- CONFIGURACIÓN ---
         const firebaseConfig = {
             apiKey: "AIzaSyBSaIzbcFiyTF1zy9_9Z97ZSPfL322xO24",
             authDomain: "inventariochuyma-da052.firebaseapp.com",
@@ -20,22 +21,22 @@
             messagingSenderId: "677439195293",
             appId: "1:677439195293:web:50b624de9e0c877c89ec74"
         };
-        
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
+        // --- LÓGICA DE PROCESOS ---
         const EQUIPMENT_LIMITS = { fermenter: 2, maturation: 2, carbonation: 1 };
-
+        
         const RECIPES = {
             pale: { 
                 name: 'Pale Ale', 
                 phases: [
                     { name: 'Cocción', offset: 0, duration: 1, equip: null },
                     { name: 'Fermentación', offset: 1, duration: 7, equip: 'fermenter' },
-                    { name: 'Trasvasije', offset: 8, duration: 1, equip: null },
+                    { name: 'Trasvasije de Fermentación a Maduración', offset: 8, duration: 1, equip: null },
                     { name: 'Maduración', offset: 9, duration: 6, equip: 'maturation' },
-                    { name: 'Trasiego', offset: 15, duration: 1, equip: null },
+                    { name: 'Trasiego de Maduración a Carbonatación', offset: 15, duration: 1, equip: null },
                     { name: 'Carbonatación', offset: 16, duration: 1, equip: 'carbonation' },
                     { name: 'Envasado', offset: 17, duration: 1, equip: 'carbonation' }
                 ] 
@@ -46,9 +47,9 @@
                     { name: 'Cocción', offset: 0, duration: 1, equip: null },
                     { name: 'Fermentación', offset: 1, duration: 7, equip: 'fermenter' },
                     { name: 'Dry Hop + Descanso', offset: 8, duration: 3, equip: 'fermenter' },
-                    { name: 'Trasvasije', offset: 11, duration: 1, equip: null },
+                    { name: 'Trasvasije de Fermentación a Maduración', offset: 11, duration: 1, equip: null },
                     { name: 'Maduración', offset: 12, duration: 4, equip: 'maturation' },
-                    { name: 'Trasiego', offset: 16, duration: 1, equip: null },
+                    { name: 'Trasiego de Maduración a Carbonatación', offset: 16, duration: 1, equip: null },
                     { name: 'Carbonatación', offset: 17, duration: 1, equip: 'carbonation' },
                     { name: 'Envasado', offset: 18, duration: 1, equip: 'carbonation' }
                 ] 
@@ -60,27 +61,21 @@
         let productionQueue = [];
         let allBatches = [];
 
-        window.formatDate = (isoDate) => {
-            if (!isoDate) return '';
-            const [y, m, d] = isoDate.split('-');
-            return `${d}-${m}-${y}`;
-        };
-
+        // --- FUNCIONES UTILITARIAS ---
+        window.formatDate = (isoDate) => { const [y, m, d] = isoDate.split('-'); return `${d}-${m}-${y}`; };
         window.isWorkingDay = (date, phaseName) => {
             const day = date.getDay();
             const dateStr = date.toISOString().split('T')[0];
-            const isHoliday = CHILEAN_HOLIDAYS.includes(dateStr);
-            if (day === 0 || isHoliday) return false;
+            if (day === 0 || CHILEAN_HOLIDAYS.includes(dateStr)) return false;
             if (day === 6) return phaseName !== 'Cocción';
             return true;
         };
-
         window.addDaysWork = (startDate, offset, phaseName) => {
             let result = new Date(startDate);
             let added = 0;
             while (added < offset) {
                 result.setDate(result.getDate() + 1);
-                if (isWorkingDay(result, phaseName)) added++;
+                if (window.isWorkingDay(result, phaseName)) added++;
             }
             return result.toISOString().split('T')[0];
         };
@@ -105,6 +100,7 @@
             return { conflict: false };
         };
 
+        // --- FUNCIONES CORE ---
         window.addToQueue = () => {
             const recipeKey = document.getElementById('recipeSelect').value;
             const count = parseInt(document.getElementById('batchCount').value || 1);
@@ -113,11 +109,10 @@
         };
 
         function renderQueue() {
-            const list = document.getElementById('queueList');
-            list.innerHTML = productionQueue.map((item, index) => `
-                <div class="grid grid-cols-3 gap-4 items-center bg-purple-50 p-3 rounded-xl mb-2 text-sm">
-                    <span class="col-span-2 font-bold text-purple-800">${item.name} (${item.count} lotes)</span>
-                    <button onclick="productionQueue.splice(${index}, 1); renderQueue()" class="text-rose-400 text-xs text-right">Eliminar</button>
+            document.getElementById('queueList').innerHTML = productionQueue.map((item, index) => `
+                <div class="flex justify-between items-center bg-purple-50 p-2 mb-1 rounded text-sm text-purple-800">
+                    <span>${item.name} (${item.count})</span>
+                    <button onclick="productionQueue.splice(${index}, 1); renderQueue()" class="text-rose-400">Eliminar</button>
                 </div>
             `).join('');
         }
@@ -125,7 +120,6 @@
         window.programarProduccion = async () => {
             const startDateValue = document.getElementById('startDate').value;
             if (!startDateValue || productionQueue.length === 0) return;
-
             let currentCoccionDate = new Date(startDateValue);
             let proposedBatches = [];
             
@@ -133,39 +127,29 @@
                 for (let i = 0; i < item.count; i++) {
                     const phases = RECIPES[item.recipeKey].phases.map(p => ({
                         name: p.name, offset: p.offset, duration: p.duration, equip: p.equip,
-                        date: addDaysWork(currentCoccionDate, p.offset, p.name)
+                        date: window.addDaysWork(currentCoccionDate, p.offset, p.name)
                     }));
                     proposedBatches.push({ recipeKey: item.recipeKey, recipeName: item.name, phases });
                     let next = new Date(currentCoccionDate);
                     next.setDate(next.getDate() + 1);
-                    while (!isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
+                    while (!window.isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
                     currentCoccionDate = next;
                 }
             }
-
             const check = checkCapacityConflict(proposedBatches);
-            if (check.conflict) {
-                if(!confirm(`ALERTA: Conflicto de equipo en ${check.equip} el ${formatDate(check.date)}. ¿Forzar programación?`)) return;
-            }
-
-            for (const b of proposedBatches) {
-                await addDoc(collection(db, "brewplan_data"), { ...b, createdAt: new Date().getTime() });
-            }
+            if (check.conflict) { if(!confirm(`ALERTA: Conflicto en ${check.equip} el ${check.date}. ¿Forzar?`)) return; }
+            for (const b of proposedBatches) { await addDoc(collection(db, "brewplan_data"), { ...b, createdAt: new Date().getTime() }); }
             productionQueue = []; renderQueue(); loadData();
-            alert("Producción programada.");
         };
 
         window.saveBatch = async (id, recipeKey, changedIndex, newDateValue) => {
-            const newDate = new Date(newDateValue);
             const offsetOfChanged = RECIPES[recipeKey].phases[changedIndex].offset;
-            let baseDate = new Date(newDate);
+            let baseDate = new Date(newDateValue);
             baseDate.setDate(baseDate.getDate() - offsetOfChanged);
-
             const updatedPhases = RECIPES[recipeKey].phases.map((p) => ({
                 name: p.name, offset: p.offset, duration: p.duration, equip: p.equip,
-                date: addDaysWork(baseDate, p.offset, p.name)
+                date: window.addDaysWork(baseDate, p.offset, p.name)
             }));
-
             await updateDoc(doc(db, "brewplan_data", id), { phases: updatedPhases });
             loadData();
         };
@@ -174,105 +158,92 @@
             const q = query(collection(db, "brewplan_data"), orderBy("createdAt", "desc"));
             const snapshot = await getDocs(q);
             allBatches = [];
+            snapshot.forEach(docSnap => allBatches.push({ id: docSnap.id, ...docSnap.data() }));
+            
             const container = document.getElementById('dashboard');
-            container.innerHTML = '';
-            snapshot.forEach(docSnap => {
-                const b = docSnap.data();
-                allBatches.push({ id: docSnap.id, ...b });
-                const div = document.createElement('div');
-                div.className = "bg-white p-6 rounded-3xl shadow-sm border border-purple-100 mb-4";
-                div.innerHTML = `
-                    <div class="flex justify-between items-center mb-4 border-b border-purple-50 pb-3">
-                        <h3 class="font-bold text-purple-900 text-lg">${b.recipeName}</h3>
-                        <button onclick="deleteBatch('${docSnap.id}')" class="text-rose-400 text-xs">Eliminar</button>
+            container.innerHTML = allBatches.map(b => `
+                <div class="bg-white p-6 rounded-3xl shadow-sm border border-purple-100 mb-4">
+                    <div class="flex justify-between items-center mb-4 border-b pb-3">
+                        <h3 class="font-bold text-purple-900">${b.recipeName}</h3>
+                        <button onclick="deleteBatch('${b.id}')" class="text-rose-400 text-xs">Eliminar</button>
                     </div>
-                    <div class="space-y-3">
-                        ${b.phases.map((p, index) => `
-                            <div class="grid grid-cols-2 items-center gap-4 text-sm">
-                                <span class="font-medium text-purple-700">${p.name}</span>
-                                <input type="date" value="${p.date}" onchange="saveBatch('${docSnap.id}', '${b.recipeKey}', ${index}, this.value)" class="bg-purple-50 p-2 rounded-lg text-right">
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-                container.appendChild(div);
-            });
+                    ${b.phases.map((p, i) => `
+                        <div class="flex justify-between text-sm py-1">
+                            <span class="text-purple-700 truncate max-w-[60%]">${p.name}</span>
+                            <input type="date" value="${p.date}" onchange="saveBatch('${b.id}', '${b.recipeKey}', ${i}, this.value)" class="bg-purple-50 rounded px-1 text-right">
+                        </div>
+                    `).join('')}
+                </div>
+            `).join('');
             renderCalendar();
         };
 
         function renderCalendar() {
-            const cal = document.getElementById('calendarContainer');
-            cal.innerHTML = '';
+            const container = document.getElementById('calendarContainer');
+            container.innerHTML = `<div class="grid grid-cols-7 gap-2 mb-2 font-bold text-[10px] uppercase text-purple-400"><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div></div>`;
+            const grid = document.createElement('div');
+            grid.className = "grid grid-cols-7 gap-2";
+            const today = new Date();
+            const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).getDay() || 7;
+            const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
             
-            // Agrupar por fecha
-            const tasksByDate = {};
-            allBatches.forEach(b => {
-                b.phases.forEach((p, index) => {
-                    if (!tasksByDate[p.date]) tasksByDate[p.date] = [];
-                    tasksByDate[p.date].push({ ...p, recipe: b.recipeName, batchId: b.id, index });
-                });
-            });
-
-            Object.keys(tasksByDate).sort().forEach(date => {
-                const div = document.createElement('div');
-                div.className = "bg-white p-4 mb-3 rounded-2xl border border-purple-100 shadow-sm";
-                div.innerHTML = `<div class="font-bold text-purple-900 mb-2">${formatDate(date)}</div>`;
+            for(let i=1; i<firstDay; i++) grid.innerHTML += `<div class="bg-gray-50 h-32 rounded-xl"></div>`;
+            for(let d=1; d<=daysInMonth; d++){
+                const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                const tasks = [];
+                allBatches.forEach(b => b.phases.forEach((p, i) => { if(p.date === dateStr) tasks.push({...p, bId: b.id, idx: i, rName: b.recipeName, rKey: b.recipeKey}) }));
                 
-                tasksByDate[date].forEach(t => {
-                    const isConflict = tasksByDate[date].filter(x => x.equip === t.equip && t.equip !== null).length > EQUIPMENT_LIMITS[t.equip];
-                    div.innerHTML += `
-                        <div class="flex items-center justify-between p-2 mb-1 bg-purple-50 rounded-lg text-sm">
-                            <span class="${isConflict ? 'text-rose-600 font-bold' : 'text-purple-700'}">${t.recipe}: ${t.name} ${isConflict ? '(¡SOBRECARGA!)' : ''}</span>
-                            <input type="date" value="${date}" onchange="saveBatch('${t.batchId}', '${t.recipe.toLowerCase().replace(' ale', '')}', ${t.index}, this.value)" class="bg-white p-1 rounded border border-purple-100">
-                        </div>
-                    `;
-                });
-                cal.appendChild(div);
-            });
+                grid.innerHTML += `
+                    <div class="bg-white h-32 p-1 border border-purple-100 rounded-xl overflow-y-auto">
+                        <div class="text-[10px] font-bold text-purple-900">${d}</div>
+                        ${tasks.map(t => `
+                            <div class="text-[8px] bg-purple-50 mb-1 p-1 rounded truncate border-l-2 border-purple-300">
+                                ${t.rName}: ${t.name}
+                                <input type="date" value="${dateStr}" onchange="saveBatch('${t.bId}', '${t.rKey}', ${t.idx}, this.value)" class="w-full bg-transparent underline">
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            container.appendChild(grid);
         }
 
         window.deleteBatch = async (id) => { try { await deleteDoc(doc(db, "brewplan_data", id)); loadData(); } catch (e) { alert("Error."); } };
         window.login = () => signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value).catch(e => alert(e.message));
         onAuthStateChanged(auth, (user) => { if (user) { document.getElementById('login-screen').classList.add('hidden'); document.getElementById('app-screen').classList.remove('hidden'); loadData(); } });
-        window.toggleView = (view) => {
-            document.getElementById('listView').classList.toggle('hidden', view !== 'list');
-            document.getElementById('calendarView').classList.toggle('hidden', view !== 'calendar');
-        };
+        window.toggleView = (view) => { document.getElementById('listView').classList.toggle('hidden', view !== 'list'); document.getElementById('calendarView').classList.toggle('hidden', view !== 'calendar'); };
     </script>
 </head>
-<body class="bg-purple-50 p-4 md:p-8">
+<body class="bg-purple-50 p-4">
     <div id="login-screen" class="max-w-md mx-auto mt-20 bg-white p-10 rounded-3xl shadow-2xl border border-purple-100">
-        <h1 class="text-3xl font-bold text-purple-950 mb-8 text-center">BrewPlan Pro</h1>
+        <h1 class="text-2xl font-bold text-purple-950 mb-6 text-center">BrewPlan Pro</h1>
         <input type="email" id="email" placeholder="Correo" class="w-full p-4 border rounded-2xl mb-4 bg-purple-50">
         <input type="password" id="password" placeholder="Clave" class="w-full p-4 border rounded-2xl mb-8 bg-purple-50">
         <button onclick="login()" class="w-full bg-purple-900 text-white py-4 rounded-2xl font-bold">Ingresar</button>
     </div>
 
-    <div id="app-screen" class="hidden max-w-xl mx-auto">
-        <h1 class="text-4xl font-bold text-purple-950 mb-8">Planificador</h1>
+    <div id="app-screen" class="hidden max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-purple-950 mb-6">Planificador Maestro</h1>
+        <div class="flex gap-2 mb-6">
+            <button onclick="toggleView('list')" class="flex-1 bg-purple-900 text-white py-2 rounded-xl font-bold">Configuración</button>
+            <button onclick="toggleView('calendar')" class="flex-1 bg-purple-800 text-white py-2 rounded-xl font-bold">Calendario</button>
+        </div>
         
-        <div class="bg-white p-8 rounded-3xl shadow-sm border border-purple-100 mb-8">
-            <h2 class="text-sm font-bold text-purple-400 uppercase tracking-widest mb-6">Planificación Mensual</h2>
-            <input type="date" id="startDate" class="w-full p-4 bg-purple-50 border rounded-2xl mb-4">
-            <div class="grid grid-cols-2 gap-4">
-                <select id="recipeSelect" class="w-full p-4 bg-purple-50 border rounded-2xl">
-                    <option value="amber">Amber Ale</option>
-                    <option value="pale">Pale Ale</option>
-                </select>
-                <input type="number" id="batchCount" value="1" class="w-full p-4 bg-purple-50 border rounded-2xl">
+        <div id="listView" class="bg-white p-6 rounded-3xl shadow-sm border border-purple-100 mb-8">
+            <input type="date" id="startDate" class="w-full p-3 bg-purple-50 border rounded-xl mb-4">
+            <div class="grid grid-cols-2 gap-2">
+                <select id="recipeSelect" class="w-full p-3 bg-purple-50 border rounded-xl"><option value="amber">Amber Ale</option><option value="pale">Pale Ale</option></select>
+                <input type="number" id="batchCount" value="1" class="w-full p-3 bg-purple-50 border rounded-xl">
             </div>
-            <button onclick="addToQueue()" class="w-full bg-purple-100 text-purple-800 py-3 rounded-2xl font-bold mb-6 mt-4">Añadir a Cola</button>
-            <div id="queueList" class="mb-6"></div>
-            <button onclick="programarProduccion()" class="w-full bg-purple-800 text-white py-4 rounded-2xl font-bold">Programar Calendario</button>
+            <button onclick="addToQueue()" class="w-full bg-purple-100 text-purple-800 py-2 rounded-xl font-bold mt-2">Añadir a Cola</button>
+            <div id="queueList" class="my-4"></div>
+            <button onclick="programarProduccion()" class="w-full bg-purple-800 text-white py-3 rounded-xl font-bold">Programar Producción</button>
+            <div id="dashboard" class="mt-8 space-y-4"></div>
         </div>
 
-        <div class="flex gap-2 mb-4">
-            <button onclick="toggleView('list')" class="flex-1 bg-purple-200 py-2 rounded-xl text-purple-900 font-bold">Dashboard</button>
-            <button onclick="toggleView('calendar')" class="flex-1 bg-purple-800 py-2 rounded-xl text-white font-bold">Calendario</button>
+        <div id="calendarView" class="hidden bg-white p-6 rounded-3xl shadow-sm border border-purple-100">
+            <div id="calendarContainer"></div>
         </div>
-        
-        <div id="listView"><div id="dashboard" class="space-y-4"></div></div>
-        <div id="calendarView" class="hidden"><div id="calendarContainer" class="space-y-2"></div></div>
     </div>
 </body>
 </html>
