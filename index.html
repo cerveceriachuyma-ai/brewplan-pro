@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BrewPlan Pro - Producción</title>
+    <title>BrewPlan Pro - Gestión de Planta</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
@@ -23,88 +27,93 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // FERIADOS CHILE 2026 (Puedes agregar más si lo necesitas)
-        const CHILEAN_HOLIDAYS = [
-            "2026-01-01", "2026-04-03", "2026-04-04", "2026-05-01", 
-            "2026-05-21", "2026-06-29", "2026-07-16", "2026-08-15", 
-            "2026-09-18", "2026-09-19", "2026-10-12", "2026-10-31", 
-            "2026-11-01", "2026-12-08", "2026-12-25"
-        ];
+        // Feriados Chile 2026
+        const CHILEAN_HOLIDAYS = ["2026-01-01", "2026-04-03", "2026-04-04", "2026-05-01", "2026-05-21", "2026-06-29", "2026-07-16", "2026-08-15", "2026-09-18", "2026-09-19", "2026-10-12", "2026-10-31", "2026-11-01", "2026-12-08", "2026-12-25"];
 
-        // Lógica de Calendario Laboral
         function isWorkingDay(date) {
             const day = date.getDay();
-            if (day === 0) return false; // Domingo
+            if (day === 0) return false; // Domingo no trabaja
             const dateStr = date.toISOString().split('T')[0];
-            if (CHILEAN_HOLIDAYS.includes(dateStr)) return false; // Feriado
-            return true; // Lunes a Sábado son días laborables
+            return !CHILEAN_HOLIDAYS.includes(dateStr);
         }
 
-        function addWorkDays(startDate, daysOffset) {
+        function getNextWorkingDay(date) {
+            let next = new Date(date);
+            next.setDate(next.getDate() + 1);
+            while (!isWorkingDay(next)) {
+                next.setDate(next.getDate() + 1);
+            }
+            return next;
+        }
+
+        function addDaysWork(startDate, offset) {
             let result = new Date(startDate);
             let added = 0;
-            while (added < daysOffset) {
+            while (added < offset) {
                 result.setDate(result.getDate() + 1);
-                if (isWorkingDay(result)) {
-                    added++;
-                }
+                if (isWorkingDay(result)) added++;
             }
-            return result;
+            return result.toISOString().split('T')[0];
         }
 
-        // --- UI Y APP ---
-        const loginScreen = document.getElementById('login-screen');
-        const appScreen = document.getElementById('app-screen');
+        const RECIPES = {
+            amber: { name: 'Amber Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Inicio de fermentación', offset: 1 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] },
+            pale: { name: 'Pale Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Inicio de fermentación', offset: 1 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] }
+        };
 
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                loginScreen.classList.add('hidden');
-                appScreen.classList.remove('hidden');
-                loadData();
-            } else {
-                loginScreen.classList.remove('hidden');
-                appScreen.classList.add('hidden');
-            }
-        });
-
+        // UI Listeners
         window.login = () => {
-            signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value)
-                .catch(e => alert("Error: " + e.message));
+            const email = document.getElementById('email').value;
+            const pass = document.getElementById('password').value;
+            signInWithEmailAndPassword(auth, email, pass).catch(e => alert("Error de acceso: " + e.message));
         };
 
         window.logout = () => signOut(auth);
 
-        const RECIPES = {
-            amber: { name: 'Amber Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] },
-            pale: { name: 'Pale Ale', phases: [{ name: 'Cocción', offset: 0 }, { name: 'Trasvase a Maduración', offset: 7 }, { name: 'Trasiego a Barril', offset: 14 }, { name: 'Carbonatación', offset: 15 }, { name: 'Envasado', offset: 16 }] }
-        };
-
         window.addBatches = async () => {
             const recipeKey = document.getElementById('recipeSelect').value;
+            const count = parseInt(document.getElementById('batchCount').value);
             const startDateValue = document.getElementById('startDate').value;
             if (!startDateValue) { alert("Selecciona fecha"); return; }
             
-            const start = new Date(startDateValue);
+            let currentStart = new Date(startDateValue);
             
-            const batch = {
-                recipeName: RECIPES[recipeKey].name,
-                startDate: startDateValue,
-                phases: RECIPES[recipeKey].phases.map(p => ({
-                    name: p.name,
-                    date: addWorkDays(start, p.offset).toISOString().split('T')[0]
-                })),
-                createdAt: new Date()
-            };
-            
-            await addDoc(collection(db, "brewplan_data"), batch);
+            for (let i = 0; i < count; i++) {
+                const batch = {
+                    recipeName: RECIPES[recipeKey].name,
+                    phases: RECIPES[recipeKey].phases.map(p => ({
+                        name: p.name,
+                        date: addDaysWork(currentStart, p.offset)
+                    })),
+                    createdAt: new Date()
+                };
+                await addDoc(collection(db, "brewplan_data"), batch);
+                currentStart = getNextWorkingDay(currentStart);
+            }
             loadData();
         };
 
         window.deleteBatch = async (id) => {
-            if (confirm("¿Eliminar planificación?")) {
+            if(confirm("¿Segura de eliminar este lote?")) {
                 await deleteDoc(doc(db, "brewplan_data", id));
                 loadData();
             }
+        };
+
+        window.exportCSV = () => {
+            let csv = "Receta,Fase,Fecha\n";
+            document.querySelectorAll('#dashboard > div').forEach(div => {
+                const recipe = div.dataset.recipe;
+                div.querySelectorAll('p').forEach(p => {
+                    csv += `${recipe},${p.dataset.phase},${p.dataset.date}\n`;
+                });
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "planificacion_produccion.csv";
+            a.click();
         };
 
         async function loadData() {
@@ -115,41 +124,66 @@
             snapshot.forEach(docSnap => {
                 const b = docSnap.data();
                 const div = document.createElement('div');
-                div.className = "bg-white p-4 rounded-xl shadow-sm border border-amber-100 mb-3 relative";
+                div.dataset.recipe = b.recipeName;
+                div.className = "bg-white p-5 rounded-2xl shadow-sm border border-purple-100 mb-4";
                 div.innerHTML = `
-                    <button onclick="deleteBatch('${docSnap.id}')" class="absolute top-2 right-2 text-red-500 font-bold">✕</button>
-                    <h3 class="font-bold text-amber-900">${b.recipeName}</h3>
-                    <p class="text-xs text-gray-500 mb-2">Inicio: ${b.startDate}</p>
-                    <div class="space-y-1">
-                        ${b.phases.map(p => `<p class="text-sm flex justify-between"><span>${p.name}</span><span class="font-mono">${p.date}</span></p>`).join('')}
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-purple-900 text-lg">${b.recipeName}</h3>
+                        <button onclick="deleteBatch('${docSnap.id}')" class="text-rose-500 hover:text-rose-700 text-sm font-semibold">Eliminar</button>
+                    </div>
+                    <div class="space-y-2">
+                        ${b.phases.map(p => `<p class="text-sm flex justify-between text-purple-700" data-phase="${p.name}" data-date="${p.date}">
+                            <span class="font-medium">${p.name}</span>
+                            <span class="font-mono text-purple-900">${p.date}</span>
+                        </p>`).join('')}
                     </div>
                 `;
                 container.appendChild(div);
             });
         }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('app-screen').classList.remove('hidden');
+                loadData();
+            } else {
+                document.getElementById('login-screen').classList.remove('hidden');
+                document.getElementById('app-screen').classList.add('hidden');
+            }
+        });
     </script>
 </head>
-<body class="bg-stone-50 min-h-screen p-4">
-    <div id="login-screen" class="max-w-sm mx-auto mt-20 bg-white p-6 rounded-2xl shadow-lg border border-amber-100">
-        <h1 class="text-xl font-bold text-amber-900 mb-4 text-center">🔐 Acceso BrewPlan Pro</h1>
-        <input type="email" id="email" placeholder="Correo" class="w-full p-2 border rounded-lg mb-2">
-        <input type="password" id="password" placeholder="Clave" class="w-full p-2 border rounded-lg mb-4">
-        <button onclick="login()" class="w-full bg-amber-800 text-white p-3 rounded-lg font-bold">Ingresar</button>
+<body class="bg-purple-50 min-h-screen p-4 md:p-8">
+    
+    <!-- Login Screen -->
+    <div id="login-screen" class="max-w-md mx-auto mt-20 bg-white p-8 rounded-3xl shadow-xl border border-purple-100">
+        <h1 class="text-2xl font-bold text-purple-950 mb-6 text-center">BrewPlan Pro</h1>
+        <input type="email" id="email" placeholder="Correo" class="w-full p-4 border border-purple-200 rounded-xl mb-3 focus:ring-2 focus:ring-purple-500 outline-none">
+        <input type="password" id="password" placeholder="Clave" class="w-full p-4 border border-purple-200 rounded-xl mb-6 focus:ring-2 focus:ring-purple-500 outline-none">
+        <button onclick="login()" class="w-full bg-purple-900 text-white py-4 rounded-xl font-bold hover:bg-purple-800 transition">Ingresar</button>
     </div>
 
-    <div id="app-screen" class="hidden max-w-lg mx-auto">
-        <header class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold text-amber-900">BrewPlan Pro</h1>
-            <button onclick="logout()" class="text-xs text-gray-400 underline">Salir</button>
-        </header>
+    <!-- App Screen -->
+    <div id="app-screen" class="hidden max-w-xl mx-auto">
+        <div class="flex justify-between items-end mb-8">
+            <h1 class="text-3xl font-extrabold text-purple-950">Planificador</h1>
+            <button onclick="logout()" class="text-purple-400 text-sm hover:text-purple-600">Salir</button>
+        </div>
 
-        <div class="bg-white p-6 rounded-2xl shadow-sm mb-6 border border-amber-100">
-            <select id="recipeSelect" class="w-full p-3 border rounded-xl mb-3">
+        <div class="bg-white p-6 rounded-3xl shadow-sm border border-purple-100 mb-8">
+            <select id="recipeSelect" class="w-full p-4 bg-purple-50 border border-purple-100 rounded-xl mb-3 font-medium text-purple-900">
                 <option value="amber">Amber Ale</option>
                 <option value="pale">Pale Ale</option>
             </select>
-            <input type="date" id="startDate" class="w-full p-3 border rounded-xl mb-3">
-            <button onclick="addBatches()" class="w-full bg-amber-800 text-white py-3 rounded-xl font-bold">➕ Programar Producción</button>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <input type="date" id="startDate" class="p-4 bg-purple-50 border border-purple-100 rounded-xl text-purple-900">
+                <input type="number" id="batchCount" placeholder="Cant. lotes" value="1" min="1" class="p-4 bg-purple-50 border border-purple-100 rounded-xl text-purple-900">
+            </div>
+            <div class="flex gap-2">
+                <button onclick="addBatches()" class="flex-1 bg-purple-800 text-white py-4 rounded-xl font-bold hover:bg-purple-900 shadow-md">Programar Producción</button>
+                <button onclick="exportCSV()" class="bg-purple-100 text-purple-700 px-6 rounded-xl font-bold hover:bg-purple-200">📥</button>
+            </div>
         </div>
 
         <div id="dashboard" class="space-y-2"></div>
