@@ -12,7 +12,7 @@
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
-        // --- CONFIGURACIÓN ---
+        // --- CONFIGURACIÓN FIREBASE ---
         const firebaseConfig = {
             apiKey: "AIzaSyBSaIzbcFiyTF1zy9_9Z97ZSPfL322xO24",
             authDomain: "inventariochuyma-da052.firebaseapp.com",
@@ -26,7 +26,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- LÓGICA DE CAPACIDAD ---
+        // --- LÓGICA DE CAPACIDAD Y RECETAS ---
         const EQUIPMENT_LIMITS = { fermenter: 2, maturation: 2, carbonation: 1 };
 
         const RECIPES = {
@@ -58,7 +58,7 @@
         let productionQueue = [];
         let allBatches = [];
 
-        // --- UTILIDADES ---
+        // --- FUNCIONES UTILITARIAS ---
         window.formatDate = (isoDate) => {
             if (!isoDate) return '';
             const [y, m, d] = isoDate.split('-');
@@ -145,7 +145,7 @@
 
             const check = checkCapacityConflict(proposedBatches);
             if (check.conflict) {
-                if(!confirm(`ALERTA: Conflicto el ${formatDate(check.date)} en ${check.equip}. ¿Programar de todas formas?`)) return;
+                if(!confirm(`ALERTA: Conflicto de equipo en ${check.equip} detectado el ${formatDate(check.date)}. ¿Forzar programación de todas formas?`)) return;
             }
 
             for (const b of proposedBatches) {
