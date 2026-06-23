@@ -9,41 +9,46 @@
     <style>body { font-family: 'Poppins', sans-serif; }</style>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
-        const firebaseConfig = { /* CONFIGURACIÓN AQUÍ */ };
+        // --- CONFIGURACIÓN INTEGRADA ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBSaIzbcFiyTF1zy9_9Z97ZSPfL322xO24",
+            authDomain: "inventariochuyma-da052.firebaseapp.com",
+            projectId: "inventariochuyma-da052",
+            storageBucket: "inventariochuyma-da052.firebasestorage.app",
+            messagingSenderId: "677439195293",
+            appId: "1:677439195293:web:50b624de9e0c877c89ec74"
+        };
+        
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- FUENTES DE VERDAD: DEFINICIÓN DE RECETAS (Offsets en días) ---
-        // Amber Ale: Ferm(1-8), DryHop(6), Diacetilo(8), Trasvasije(9), Madur(10-14), Trasiego(15), Envasado(16)
-        // Pale Ale: Ferm(1-7), Diacetilo(7), Trasvasije(8), Madur(9-14), Trasiego(15), Envasado(16)
+        // --- LÓGICA DE CAPACIDAD ---
+        const EQUIPMENT_LIMITS = { fermenter: 2, maturation: 2, carbonation: 1 };
+
         const RECIPES = {
-            amber: { 
-                name: 'Amber Ale', 
-                phases: [
-                    { name: 'Cocción', offset: 0 },
-                    { name: 'Inicio Fermentación', offset: 1 },
-                    { name: 'Dry Hop', offset: 6 },
-                    { name: 'Descanso Diacetilo', offset: 8 },
-                    { name: 'Trasvasije a Maduración', offset: 9 },
-                    { name: 'Maduración', offset: 10 },
-                    { name: 'Trasiego a Carbonatación', offset: 15 },
-                    { name: 'Envasado', offset: 16 }
-                ] 
-            },
             pale: { 
                 name: 'Pale Ale', 
                 phases: [
-                    { name: 'Cocción', offset: 0 }, 
-                    { name: 'Inicio Fermentación', offset: 1 }, 
-                    { name: 'Descanso Diacetilo', offset: 7 }, 
-                    { name: 'Trasvasije a Maduración', offset: 8 },
-                    { name: 'Maduración', offset: 9 }, 
-                    { name: 'Trasiego a Carbonatación', offset: 15 },
-                    { name: 'Envasado', offset: 16 }
+                    { name: 'Cocción', offset: 0, duration: 1, equip: null },
+                    { name: 'Fermentación', offset: 1, duration: 7, equip: 'fermenter' },
+                    { name: 'Trasvasije', offset: 8, duration: 1, equip: null },
+                    { name: 'Maduración', offset: 9, duration: 6, equip: 'maturation' },
+                    { name: 'Carbonatación y Envasado', offset: 15, duration: 2, equip: 'carbonation' }
+                ] 
+            },
+            amber: { 
+                name: 'Amber Ale', 
+                phases: [
+                    { name: 'Cocción', offset: 0, duration: 1, equip: null },
+                    { name: 'Fermentación', offset: 1, duration: 7, equip: 'fermenter' },
+                    { name: 'Dry Hop + Descanso', offset: 8, duration: 3, equip: 'fermenter' },
+                    { name: 'Trasvasije', offset: 11, duration: 1, equip: null },
+                    { name: 'Maduración', offset: 11, duration: 4, equip: 'maturation' },
+                    { name: 'Carbonatación y Envasado', offset: 15, duration: 2, equip: 'carbonation' }
                 ] 
             }
         };
@@ -53,12 +58,18 @@
         let productionQueue = [];
         let allBatches = [];
 
+        window.formatDate = (isoDate) => {
+            if (!isoDate) return '';
+            const [y, m, d] = isoDate.split('-');
+            return `${d}-${m}-${y}`;
+        };
+
         window.isWorkingDay = (date, phaseName) => {
             const day = date.getDay();
             const dateStr = date.toISOString().split('T')[0];
             const isHoliday = CHILEAN_HOLIDAYS.includes(dateStr);
-            if (day === 0 || isHoliday) return false; // Domingo y feriado siempre OFF
-            if (day === 6) return phaseName !== 'Cocción'; // Sábado solo labores NO Cocción
+            if (day === 0 || isHoliday) return false;
+            if (day === 6) return phaseName !== 'Cocción';
             return true;
         };
 
@@ -72,16 +83,30 @@
             return result.toISOString().split('T')[0];
         };
 
-        window.getNextValidCoccionDate = (date) => {
-            let next = new Date(date);
-            next.setDate(next.getDate() + 1);
-            while (!isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
-            return next;
+        window.checkCapacityConflict = (newBatches) => {
+            const usageTimeline = {};
+            const all = [...allBatches, ...newBatches];
+            
+            for (const b of all) {
+                for (const p of b.phases) {
+                    if (p.equip) {
+                        for (let d = 0; d < p.duration; d++) {
+                            let dateObj = new Date(p.date);
+                            dateObj.setDate(dateObj.getDate() + d);
+                            const dateStr = dateObj.toISOString().split('T')[0];
+                            if (!usageTimeline[dateStr]) usageTimeline[dateStr] = { fermenter: 0, maturation: 0, carbonation: 0 };
+                            usageTimeline[dateStr][p.equip]++;
+                            if (usageTimeline[dateStr][p.equip] > EQUIPMENT_LIMITS[p.equip]) return { conflict: true, date: dateStr, equip: p.equip };
+                        }
+                    }
+                }
+            }
+            return { conflict: false };
         };
 
         window.addToQueue = () => {
             const recipeKey = document.getElementById('recipeSelect').value;
-            const count = parseInt(document.getElementById('batchCount').value);
+            const count = parseInt(document.getElementById('batchCount').value || 1);
             productionQueue.push({ recipeKey, count, name: RECIPES[recipeKey].name });
             renderQueue();
         };
@@ -89,9 +114,9 @@
         function renderQueue() {
             const list = document.getElementById('queueList');
             list.innerHTML = productionQueue.map((item, index) => `
-                <div class="flex justify-between items-center bg-purple-50 p-3 rounded-xl mb-2 text-sm">
-                    <span class="font-bold text-purple-800">${item.name} (${item.count} lotes)</span>
-                    <button onclick="productionQueue.splice(${index}, 1); renderQueue()" class="text-rose-400 text-xs">Eliminar</button>
+                <div class="grid grid-cols-3 gap-4 items-center bg-purple-50 p-3 rounded-xl mb-2 text-sm">
+                    <span class="col-span-2 font-bold text-purple-800">${item.name} (${item.count} lotes)</span>
+                    <button onclick="productionQueue.splice(${index}, 1); renderQueue()" class="text-rose-400 text-xs text-right">Eliminar</button>
                 </div>
             `).join('');
         }
@@ -101,58 +126,37 @@
             if (!startDateValue || productionQueue.length === 0) return;
             
             let currentCoccionDate = new Date(startDateValue);
+            let proposedBatches = [];
             
             for (const item of productionQueue) {
                 for (let i = 0; i < item.count; i++) {
-                    const batch = {
-                        recipeKey: item.recipeKey,
-                        recipeName: item.name,
-                        phases: RECIPES[item.recipeKey].phases.map(p => ({
-                            name: p.name,
-                            offset: p.offset,
-                            date: addDaysWork(currentCoccionDate, p.offset, p.name)
-                        })),
-                        createdAt: new Date().getTime()
-                    };
-                    await addDoc(collection(db, "brewplan_data"), batch);
-                    currentCoccionDate = getNextValidCoccionDate(currentCoccionDate);
+                    const phases = RECIPES[item.recipeKey].phases.map(p => ({
+                        name: p.name,
+                        offset: p.offset,
+                        duration: p.duration,
+                        equip: p.equip,
+                        date: addDaysWork(currentCoccionDate, p.offset, p.name)
+                    }));
+                    proposedBatches.push({ recipeKey: item.recipeKey, recipeName: item.name, phases });
+                    let next = new Date(currentCoccionDate);
+                    next.setDate(next.getDate() + 1);
+                    while (!isWorkingDay(next, 'Cocción')) next.setDate(next.getDate() + 1);
+                    currentCoccionDate = next;
                 }
             }
+
+            const check = checkCapacityConflict(proposedBatches);
+            if (check.conflict) {
+                alert(`¡ALERTA! Conflicto detectado el ${formatDate(check.date)}. El equipo ${check.equip} está al límite.`);
+                return;
+            }
+
+            for (const b of proposedBatches) {
+                await addDoc(collection(db, "brewplan_data"), { ...b, createdAt: new Date().getTime() });
+            }
             productionQueue = []; renderQueue(); loadData();
+            alert("Producción programada exitosamente.");
         };
-
-        window.toggleView = (view) => {
-            document.getElementById('listView').classList.toggle('hidden', view !== 'list');
-            document.getElementById('calendarView').classList.toggle('hidden', view !== 'calendar');
-            if (view === 'calendar') renderCalendar();
-        };
-
-        function renderCalendar() {
-            const cal = document.getElementById('calendarContainer');
-            cal.innerHTML = '';
-            
-            // Agrupar tareas por fecha
-            const tasksByDate = {};
-            allBatches.forEach(b => {
-                b.phases.forEach(p => {
-                    if (!tasksByDate[p.date]) tasksByDate[p.date] = [];
-                    tasksByDate[p.date].push({ recipe: b.recipeName, task: p.name });
-                });
-            });
-
-            // Crear lista cronológica
-            const sortedDates = Object.keys(tasksByDate).sort();
-            sortedDates.forEach(date => {
-                const tasks = tasksByDate[date];
-                const div = document.createElement('div');
-                div.className = `p-4 mb-2 rounded-2xl border ${tasks.length > 1 ? 'bg-rose-50 border-rose-200' : 'bg-white border-purple-100'}`;
-                div.innerHTML = `
-                    <div class="font-bold text-purple-900">${date.split('-').reverse().join('-')}</div>
-                    <div class="text-sm text-purple-700">${tasks.map(t => `<div class="mt-1">• ${t.recipe}: ${t.task}</div>`).join('')}</div>
-                `;
-                cal.appendChild(div);
-            });
-        }
 
         window.loadData = async () => {
             const q = query(collection(db, "brewplan_data"), orderBy("createdAt", "desc"));
@@ -160,7 +164,6 @@
             allBatches = [];
             const container = document.getElementById('dashboard');
             container.innerHTML = '';
-            
             snapshot.forEach(docSnap => {
                 const b = docSnap.data();
                 allBatches.push({ id: docSnap.id, ...b });
@@ -171,11 +174,11 @@
                         <h3 class="font-bold text-purple-900 text-lg">${b.recipeName}</h3>
                         <button onclick="deleteBatch('${docSnap.id}')" class="text-rose-400 text-xs">Eliminar</button>
                     </div>
-                    <div class="space-y-2">
+                    <div class="space-y-3">
                         ${b.phases.map((p, index) => `
-                            <div class="flex justify-between items-center text-sm">
+                            <div class="grid grid-cols-2 items-center gap-4 text-sm">
                                 <span class="font-medium text-purple-700">${p.name}</span>
-                                <input type="date" value="${p.date}" onchange="saveBatch('${docSnap.id}', '${b.recipeKey}', ${index}, this.value)" class="bg-purple-50 p-1 rounded-lg">
+                                <span class="text-right text-purple-900 font-bold">${formatDate(p.date)}</span>
                             </div>
                         `).join('')}
                     </div>
@@ -184,26 +187,8 @@
             });
         };
 
-        window.saveBatch = async (id, recipeKey, changedIndex, newDateValue) => {
-            const batch = allBatches.find(b => b.id === id);
-            const refDate = new Date(newDateValue);
-            const offsetOfChanged = RECIPES[recipeKey].phases[changedIndex].offset;
-            
-            // Calcular fecha base de cocción hacia atrás para regenerar la cascada
-            const baseDate = new Date(refDate);
-            baseDate.setDate(baseDate.getDate() - offsetOfChanged);
-
-            const updatedPhases = RECIPES[recipeKey].phases.map((p) => ({
-                name: p.name,
-                offset: p.offset,
-                date: addDaysWork(baseDate, p.offset, p.name)
-            }));
-            await updateDoc(doc(db, "brewplan_data", id), { phases: updatedPhases });
-            loadData();
-        };
-
         window.deleteBatch = async (id) => { await deleteDoc(doc(db, "brewplan_data", id)); loadData(); };
-        window.login = () => signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value).catch(e => console.error(e));
+        window.login = () => signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value).catch(e => alert("Error: " + e.message));
         
         onAuthStateChanged(auth, (user) => {
             if (user) { 
@@ -212,6 +197,11 @@
                 loadData(); 
             }
         });
+
+        window.toggleView = (view) => {
+            document.getElementById('listView').classList.toggle('hidden', view !== 'list');
+            document.getElementById('calendarView').classList.toggle('hidden', view !== 'calendar');
+        };
     </script>
 </head>
 <body class="bg-purple-50 p-4 md:p-8">
@@ -226,16 +216,20 @@
         <h1 class="text-4xl font-bold text-purple-950 mb-8">Planificador</h1>
         
         <div class="bg-white p-8 rounded-3xl shadow-sm border border-purple-100 mb-8">
-            <h2 class="text-sm font-bold text-purple-400 uppercase tracking-widest mb-6">1. Configurar Producción</h2>
-            <select id="recipeSelect" class="w-full p-4 bg-purple-50 border rounded-2xl mb-4">
-                <option value="amber">Amber Ale</option>
-                <option value="pale">Pale Ale</option>
-            </select>
-            <input type="number" id="batchCount" value="1" min="1" class="w-full p-4 bg-purple-50 border rounded-2xl mb-4">
-            <button onclick="addToQueue()" class="w-full bg-purple-100 text-purple-800 py-3 rounded-2xl font-bold mb-6 hover:bg-purple-200">Añadir a Cola</button>
+            <h2 class="text-sm font-bold text-purple-400 uppercase tracking-widest mb-6">Planificación Mensual</h2>
+            <label class="block text-xs font-bold text-purple-800 mb-2">Fecha Inicio Producción</label>
+            <input type="date" id="startDate" class="w-full p-4 bg-purple-50 border rounded-2xl mb-4">
+            
+            <div class="grid grid-cols-2 gap-4">
+                <select id="recipeSelect" class="w-full p-4 bg-purple-50 border rounded-2xl">
+                    <option value="amber">Amber Ale</option>
+                    <option value="pale">Pale Ale</option>
+                </select>
+                <input type="number" id="batchCount" value="1" class="w-full p-4 bg-purple-50 border rounded-2xl">
+            </div>
+            <button onclick="addToQueue()" class="w-full bg-purple-100 text-purple-800 py-3 rounded-2xl font-bold mb-6 mt-4">Añadir a Cola</button>
             <div id="queueList" class="mb-6"></div>
-            <input type="date" id="startDate" class="w-full p-4 bg-purple-50 border rounded-2xl mb-6">
-            <button onclick="programarProduccion()" class="w-full bg-purple-800 text-white py-4 rounded-2xl font-bold hover:bg-purple-900">Programar Toda la Producción</button>
+            <button onclick="programarProduccion()" class="w-full bg-purple-800 text-white py-4 rounded-2xl font-bold">Programar Calendario</button>
         </div>
 
         <div class="flex gap-2 mb-4">
@@ -243,12 +237,8 @@
             <button onclick="toggleView('calendar')" class="flex-1 bg-purple-800 py-2 rounded-xl text-white font-bold">Calendario</button>
         </div>
         
-        <div id="listView">
-            <div id="dashboard" class="space-y-4"></div>
-        </div>
-        <div id="calendarView" class="hidden">
-            <div id="calendarContainer" class="space-y-2"></div>
-        </div>
+        <div id="listView"><div id="dashboard" class="space-y-4"></div></div>
+        <div id="calendarView" class="hidden"><div id="calendarContainer" class="space-y-2"></div></div>
     </div>
 </body>
 </html>
